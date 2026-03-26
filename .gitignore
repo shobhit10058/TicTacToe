@@ -1,0 +1,42 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+go.sum
+
+# Specifically ignore built plugin files
+server/*.so
+
+# Node
+web/node_modules/
+web/dist/
+web/.env
+web/.env.local
+web/.env.*.local
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Nakama data
+nakama/data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore

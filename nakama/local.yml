@@ -1,0 +1,16 @@
+name: nakama1
+logger:
+  level: "DEBUG"
+
+console:
+  port: 7351
+  username: admin
+  password: password
+
+socket:
+  port: 7350
+  max_message_size_bytes: 4096
+
+runtime:
+  path: "/nakama/data/modules"
+  http_key: "defaulthttpkey"
