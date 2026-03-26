@@ -30,9 +30,34 @@ export interface GameStatePayload {
   phase: Phase;
   winner: string; // user_id | "draw" | ""
   move_count: number;
+  timed_mode?: boolean;
+  turn_deadline_ms?: number; // epoch ms; 0 in classic mode or after game over
 }
 
 /** Sent to the requesting client only on an invalid action. OpCode.ERROR */
 export interface ErrorPayload {
   message: string;
+}
+
+// ---------------------------------------------------------------------------
+// Leaderboard / stats (RPC responses)
+// ---------------------------------------------------------------------------
+
+export interface PlayerStats {
+  wins: number;
+  losses: number;
+  draws: number;
+  currentStreak: number;
+  bestStreak: number;
+  gamesPlayed: number;
+}
+
+export interface LeaderboardRow {
+  rank: number;
+  username: string;
+  wins: number;
+}
+
+export interface LeaderboardResponse {
+  records: LeaderboardRow[];
 }

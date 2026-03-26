@@ -12,6 +12,8 @@ export interface GameState {
   phase: 'waiting' | 'playing' | 'finished';
   winner: string;
   pendingCell: number | null;
+  timedMode: boolean;
+  turnDeadlineMs: number;
 }
 
 /**
@@ -41,5 +43,7 @@ export function applyServerState(
     phase,
     winner: gs.winner,
     pendingCell: null, // authoritative state always clears optimistic moves
+    timedMode: gs.timed_mode ?? false,
+    turnDeadlineMs: gs.turn_deadline_ms ?? 0,
   };
 }

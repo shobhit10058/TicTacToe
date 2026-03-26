@@ -4,34 +4,50 @@ import { OpCode, MovePayload, ErrorPayload, Symbol as GameSymbol } from '../prot
 import { applyServerState } from '../game/reducer';
 
 export type MatchPhase = 'idle' | 'searching' | 'waiting' | 'playing' | 'finished';
+export type MatchMode = 'quick' | 'private' | null;
+export type GameMode = 'classic' | 'timed';
 
 // MatchState is defined independently (not extending GameState) to avoid
 // a TypeScript widening conflict on the `phase` field.
 export interface MatchState {
   matchId: string | null;
   phase: MatchPhase;
+  matchMode: MatchMode;
+  gameMode: GameMode;
   board: GameSymbol[];
   currentTurn: string;
   mySymbol: GameSymbol;
   opponentSymbol: GameSymbol;
   winner: string;
   myUserId: string;
+  myUsername: string;
+  opponentUserId: string;
+  opponentUsername: string;
   error: string | null;
   pendingCell: number | null;
+  timedMode: boolean;
+  turnDeadlineMs: number;
 }
 
-function initialMatchState(myUserId: string): MatchState {
+function initialMatchState(myUserId: string, myUsername: string): MatchState {
   return {
     matchId: null,
     phase: 'idle',
+    matchMode: null,
+    gameMode: 'classic',
     board: Array(9).fill('') as GameSymbol[],
     currentTurn: '',
     mySymbol: '',
     opponentSymbol: '',
     winner: '',
     myUserId,
+    myUsername,
+    opponentUserId: '',
+    opponentUsername: '',
     error: null,
     pendingCell: null,
+    timedMode: false,
+    turnDeadlineMs: 0,
   };
 }
 
@@ -41,8 +57,24 @@ export function useMatch(
   session: Session | null,
 ) {
   const myUserId   = session?.user_id ?? '';
-  const [state, setState] = useState<MatchState>(() => initialMatchState(myUserId));
+  const myUsername = session?.username ?? '';
+  const [state, setState] = useState<MatchState>(() => initialMatchState(myUserId, myUsername));
   const matchIdRef = useRef<string | null>(null);
+
+  // Keep identity fields in sync — useState initializer only runs once (before login).
+  useEffect(() => {
+    if (myUserId) setState((prev) => ({ ...prev, myUserId, myUsername }));
+  }, [myUserId, myUsername]);
+
+  // Look up the opponent's username once we know their user ID.
+  useEffect(() => {
+    const oppId = state.opponentUserId;
+    if (!oppId || !client || !session) return;
+    client.getUsers(session, [oppId]).then((result) => {
+      const name = result.users?.[0]?.username ?? oppId;
+      setState((prev) => prev.opponentUserId === oppId ? { ...prev, opponentUsername: name } : prev);
+    }).catch(() => {});
+  }, [state.opponentUserId, client, session]);
 
   // Wire up socket listeners whenever the socket reference changes
   useEffect(() => {
@@ -50,22 +82,26 @@ export function useMatch(
 
     socket.onmatchdata = (matchData) => {
       const opCode  = matchData.op_code;
-      const raw     = new TextDecoder().decode(matchData.data as ArrayBuffer);
+      const raw     = new TextDecoder().decode(matchData.data as Uint8Array);
       const payload = JSON.parse(raw);
 
       if (opCode === OpCode.GAME_STATE || opCode === OpCode.GAME_OVER) {
         setState((prev) => {
-          const next = applyServerState(prev, payload, myUserId);
+          const next = applyServerState(prev as any, payload, myUserId);
+          const oppEntry = Object.keys(payload.symbols ?? {}).find((id) => id !== myUserId);
           return {
             ...prev,
-            board:           next.board,
-            currentTurn:     next.currentTurn,
-            mySymbol:        next.mySymbol,
-            opponentSymbol:  next.opponentSymbol,
-            phase:           next.phase,
-            winner:          next.winner,
-            pendingCell:     next.pendingCell,
-            error:           null,
+            board:            next.board,
+            currentTurn:      next.currentTurn,
+            mySymbol:         next.mySymbol,
+            opponentSymbol:   next.opponentSymbol,
+            phase:            next.phase,
+            winner:           next.winner,
+            pendingCell:      next.pendingCell,
+            timedMode:        next.timedMode ?? false,
+            turnDeadlineMs:   next.turnDeadlineMs ?? 0,
+            opponentUserId:   oppEntry ?? prev.opponentUserId,
+            error:            null,
           };
         });
       } else if (opCode === OpCode.ERROR) {
@@ -85,12 +121,21 @@ export function useMatch(
       }
     };
 
-    // Nakama matchmaker paired two tickets — join the authoritative match
+    // Nakama matchmaker paired two tickets — join the authoritative match.
+    // Server-side hook populates match_id; token is only set for relayed matches.
     socket.onmatchmakermatched = async (matched) => {
       try {
-        const match = await socket.joinMatch(undefined, matched.token);
+        const match = matched.match_id
+          ? await socket.joinMatch(matched.match_id)
+          : await socket.joinMatch(undefined, matched.token);
         matchIdRef.current = match.match_id;
-        setState((prev) => ({ ...prev, matchId: match.match_id, phase: 'waiting' }));
+        setState((prev) => ({
+          ...prev,
+          matchId: match.match_id,
+          // GAME_STATE may have already arrived during the await and set phase to
+          // 'playing'; only fall back to 'waiting' if we're still searching.
+          phase: prev.phase === 'searching' ? 'waiting' : prev.phase,
+        }));
       } catch (err) {
         setState((prev) => ({
           ...prev,
@@ -108,11 +153,12 @@ export function useMatch(
   }, [socket, myUserId]);
 
   // Auto-match via Nakama's built-in matchmaker (race-free, preferred path)
-  const findMatch = useCallback(async () => {
+  const findMatch = useCallback(async (mode: GameMode = 'classic') => {
     if (!socket) return;
-    setState((prev) => ({ ...prev, phase: 'searching', error: null }));
+    setState((prev) => ({ ...prev, phase: 'searching', matchMode: 'quick', gameMode: mode, error: null }));
     try {
-      await socket.addMatchmaker('*', 2, 2, {}, {});
+      // Pass mode as a matchmaker property so the server hook can read it.
+      await socket.addMatchmaker('*', 2, 2, { mode }, {});
       // onmatchmakermatched above will fire when Nakama pairs a second ticket
     } catch (err) {
       setState((prev) => ({
@@ -124,12 +170,12 @@ export function useMatch(
   }, [socket]);
 
   // Create a named private match; copy the ID and share it with a friend
-  const createMatch = useCallback(async () => {
+  const createMatch = useCallback(async (mode: GameMode = 'classic') => {
     if (!client || !session) return;
-    setState((prev) => ({ ...prev, phase: 'searching', error: null }));
+    setState((prev) => ({ ...prev, phase: 'searching', matchMode: 'private', gameMode: mode, error: null }));
     try {
-      const result       = await client.rpc(session, 'create_match', '');
-      const { match_id } = JSON.parse(result.payload ?? '{}') as { match_id: string };
+      const result       = await client.rpc(session, 'create_match', { mode });
+      const { match_id } = (result.payload ?? {}) as unknown as { match_id: string };
       if (!match_id) throw new Error('No match ID returned');
       await socket?.joinMatch(match_id);
       matchIdRef.current = match_id;
@@ -146,7 +192,7 @@ export function useMatch(
   // Join an existing match by ID (private room flow)
   const joinMatch = useCallback(async (matchId: string) => {
     if (!socket) return;
-    setState((prev) => ({ ...prev, phase: 'searching', error: null }));
+    setState((prev) => ({ ...prev, phase: 'searching', matchMode: 'private', error: null }));
     try {
       await socket.joinMatch(matchId);
       matchIdRef.current = matchId;
@@ -179,8 +225,8 @@ export function useMatch(
       try { await socket.leaveMatch(matchIdRef.current); } catch { /* best-effort */ }
       matchIdRef.current = null;
     }
-    setState(initialMatchState(myUserId));
-  }, [socket, myUserId]);
+    setState(initialMatchState(myUserId, myUsername));
+  }, [socket, myUserId, myUsername]);
 
   return { state, findMatch, createMatch, joinMatch, sendMove, leaveMatch };
 }

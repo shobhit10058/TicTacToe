@@ -32,11 +32,12 @@ export function useNakama(): NakamaState {
     setConnecting(true);
     setError(null);
     try {
-      // Persist a stable device ID so the same user gets the same account
-      let deviceId = localStorage.getItem('nakama_device_id');
+      // Use sessionStorage so each browser tab gets its own Nakama identity.
+      // This allows two tabs in the same browser to play against each other.
+      let deviceId = sessionStorage.getItem('nakama_device_id');
       if (!deviceId) {
         deviceId = crypto.randomUUID();
-        localStorage.setItem('nakama_device_id', deviceId);
+        sessionStorage.setItem('nakama_device_id', deviceId);
       }
 
       const sess = await clientRef.current.authenticateDevice(deviceId, true, username);

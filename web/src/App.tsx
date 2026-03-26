@@ -1,9 +1,13 @@
+import { useState } from 'react';
 import { useNakama } from './hooks/useNakama';
 import { useMatch } from './hooks/useMatch';
 import { LoginScreen } from './components/LoginScreen';
 import { LobbyScreen } from './components/LobbyScreen';
 import { GameScreen } from './components/GameScreen';
 import { GameOver } from './components/GameOver';
+import { LeaderboardScreen } from './components/LeaderboardScreen';
+
+type AppScreen = 'lobby' | 'leaderboard';
 
 export default function App() {
   const nakama = useNakama();
@@ -12,6 +16,7 @@ export default function App() {
     nakama.client,
     nakama.session,
   );
+  const [screen, setScreen] = useState<AppScreen>('lobby');
 
   // 1. Not logged in yet
   if (!nakama.session) {
@@ -29,28 +34,28 @@ export default function App() {
     return <GameOver match={match} onPlayAgain={leaveMatch} />;
   }
 
-  // 3. In lobby (idle) — no active match
-  if (match.phase === 'idle') {
+  // 3. Leaderboard
+  if (screen === 'leaderboard') {
     return (
-      <LobbyScreen
-        onFindMatch={findMatch}
-        onCreateMatch={createMatch}
-        onJoinMatch={joinMatch}
-        phase={match.phase}
-        matchId={match.matchId}
+      <LeaderboardScreen
+        client={nakama.client}
+        session={nakama.session}
+        onBack={() => setScreen('lobby')}
       />
     );
   }
 
-  // 4. Searching / waiting / playing
-  if (match.phase === 'searching' || match.phase === 'waiting') {
+  // 4. In lobby or searching/waiting — show lobby shell
+  if (match.phase === 'idle' || match.phase === 'searching' || match.phase === 'waiting') {
     return (
       <LobbyScreen
         onFindMatch={findMatch}
         onCreateMatch={createMatch}
         onJoinMatch={joinMatch}
+        onShowLeaderboard={() => setScreen('leaderboard')}
         phase={match.phase}
         matchId={match.matchId}
+        matchMode={match.matchMode}
       />
     );
   }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Board } from './Board';
 import { MatchState } from '../hooks/useMatch';
 
@@ -7,24 +8,52 @@ interface Props {
   onLeave: () => void;
 }
 
+/** Returns seconds remaining until deadline, or null when not in timed mode. */
+function useCountdown(timedMode: boolean, turnDeadlineMs: number, phase: string): number | null {
+  const [seconds, setSeconds] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!timedMode || phase !== 'playing' || turnDeadlineMs === 0) {
+      setSeconds(null);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.max(0, Math.ceil((turnDeadlineMs - Date.now()) / 1000));
+      setSeconds(remaining);
+    };
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [timedMode, turnDeadlineMs, phase]);
+
+  return seconds;
+}
+
 export function GameScreen({ match, onMove, onLeave }: Props) {
-  const isMyTurn = match.currentTurn === match.myUserId && match.phase === 'playing';
+  const isMyTurn   = match.currentTurn === match.myUserId && match.phase === 'playing';
+  const countdown  = useCountdown(match.timedMode, match.turnDeadlineMs, match.phase);
 
   const turnText =
     match.phase === 'waiting' ? 'Waiting for opponent…' :
     isMyTurn                  ? `Your turn (${match.mySymbol})` :
                                 `Opponent's turn (${match.opponentSymbol})`;
 
+  const timerColor =
+    countdown === null    ? '#888' :
+    countdown <= 5        ? '#ff6b6b' :
+    countdown <= 10       ? '#ffb347' :
+                            '#00e5c0';
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
         <div style={styles.playerInfo}>
           <span style={{ color: '#00e5c0' }}>
-            You&nbsp;({match.mySymbol || '?'})
+            {match.myUsername || 'You'}&nbsp;({match.mySymbol || '?'})
           </span>
           <span style={{ color: '#555', fontSize: '0.8rem' }}>vs</span>
           <span style={{ color: '#ff6b9d' }}>
-            Opp&nbsp;({match.opponentSymbol || '?'})
+            {match.opponentUsername || 'Opponent'}&nbsp;({match.opponentSymbol || '?'})
           </span>
         </div>
 
@@ -37,6 +66,12 @@ export function GameScreen({ match, onMove, onLeave }: Props) {
         >
           {turnText}
         </div>
+
+        {countdown !== null && (
+          <div style={{ ...styles.timer, color: timerColor }}>
+            {countdown}s
+          </div>
+        )}
       </div>
 
       <Board
@@ -84,6 +119,12 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '20px',
     fontSize: '0.9rem',
     transition: 'all 0.2s',
+  },
+  timer: {
+    fontSize: '2rem',
+    fontWeight: 700,
+    fontVariantNumeric: 'tabular-nums',
+    transition: 'color 0.3s',
   },
   error: {
     color: '#ff6b6b',

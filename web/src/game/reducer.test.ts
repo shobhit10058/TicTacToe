@@ -13,6 +13,8 @@ const emptyState: GameState = {
   phase: 'waiting',
   winner: '',
   pendingCell: null,
+  timedMode: false,
+  turnDeadlineMs: 0,
 };
 
 describe('applyServerState', () => {

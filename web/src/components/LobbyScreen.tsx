@@ -1,15 +1,19 @@
 import { useState } from 'react';
+import { GameMode } from '../hooks/useMatch';
 
 interface Props {
-  onFindMatch: () => void;
-  onCreateMatch: () => void;
+  onFindMatch: (mode: GameMode) => void;
+  onCreateMatch: (mode: GameMode) => void;
   onJoinMatch: (id: string) => void;
+  onShowLeaderboard: () => void;
   phase: string;
   matchId: string | null;
+  matchMode: 'quick' | 'private' | null;
 }
 
-export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, phase, matchId }: Props) {
-  const [joinId, setJoinId] = useState('');
+export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, onShowLeaderboard, phase, matchId, matchMode }: Props) {
+  const [joinId, setJoinId]       = useState('');
+  const [gameMode, setGameMode]   = useState<GameMode>('classic');
 
   const isSearching = phase === 'searching' || phase === 'waiting';
 
@@ -21,7 +25,7 @@ export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, phase, ma
           <p style={styles.status}>
             {phase === 'searching' ? 'Finding a match…' : 'Waiting for opponent…'}
           </p>
-          {matchId && (
+          {matchId && matchMode === 'private' && (
             <div style={styles.roomCode}>
               <p style={styles.roomLabel}>Room code (share with a friend)</p>
               <p style={styles.roomId}>{matchId}</p>
@@ -44,7 +48,23 @@ export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, phase, ma
       <div style={styles.card}>
         <h2 style={styles.title}>Find a Game</h2>
 
-        <button style={styles.primaryBtn} onClick={onFindMatch}>
+        {/* Mode selector */}
+        <div style={styles.modeRow}>
+          <button
+            style={{ ...styles.modeBtn, ...(gameMode === 'classic' ? styles.modeBtnActive : {}) }}
+            onClick={() => setGameMode('classic')}
+          >
+            Classic
+          </button>
+          <button
+            style={{ ...styles.modeBtn, ...(gameMode === 'timed' ? styles.modeBtnActive : {}) }}
+            onClick={() => setGameMode('timed')}
+          >
+            Timed (30s)
+          </button>
+        </div>
+
+        <button style={styles.primaryBtn} onClick={() => onFindMatch(gameMode)}>
           Quick match
         </button>
 
@@ -52,7 +72,7 @@ export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, phase, ma
           <span>or</span>
         </div>
 
-        <button style={styles.secondaryBtn} onClick={onCreateMatch}>
+        <button style={styles.secondaryBtn} onClick={() => onCreateMatch(gameMode)}>
           Create private room
         </button>
 
@@ -75,6 +95,10 @@ export function LobbyScreen({ onFindMatch, onCreateMatch, onJoinMatch, phase, ma
             Join
           </button>
         </div>
+
+        <button style={styles.leaderboardBtn} onClick={onShowLeaderboard}>
+          Leaderboard
+        </button>
       </div>
     </div>
   );
@@ -105,6 +129,26 @@ const styles: Record<string, React.CSSProperties> = {
     textAlign: 'center',
     color: '#e0e0e0',
     marginBottom: '0.5rem',
+  },
+  modeRow: {
+    display: 'flex',
+    gap: '0.5rem',
+  },
+  modeBtn: {
+    flex: 1,
+    padding: '0.6rem',
+    borderRadius: '8px',
+    border: '1px solid #2a2a3a',
+    background: 'transparent',
+    color: '#888',
+    fontSize: '0.9rem',
+    cursor: 'pointer',
+    transition: 'all 0.15s',
+  },
+  modeBtnActive: {
+    border: '1px solid #00e5c0',
+    color: '#00e5c0',
+    background: 'rgba(0,229,192,0.08)',
   },
   spinner: {
     width: '48px',
@@ -202,5 +246,14 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     minHeight: '48px',
     transition: 'opacity 0.2s',
+  },
+  leaderboardBtn: {
+    padding: '0.6rem',
+    borderRadius: '8px',
+    border: '1px solid #2a2a3a',
+    background: 'transparent',
+    color: '#888',
+    fontSize: '0.9rem',
+    cursor: 'pointer',
   },
 };
