@@ -157,8 +157,8 @@ export function useMatch(
     if (!socket) return;
     setState((prev) => ({ ...prev, phase: 'searching', matchMode: 'quick', gameMode: mode, error: null }));
     try {
-      // Pass mode as a matchmaker property so the server hook can read it.
-      await socket.addMatchmaker('*', 2, 2, { mode }, {});
+      // Filter by mode so classic players only match classic, timed only timed.
+      await socket.addMatchmaker(`+properties.mode:${mode}`, 2, 2, { mode }, {});
       // onmatchmakermatched above will fire when Nakama pairs a second ticket
     } catch (err) {
       setState((prev) => ({
