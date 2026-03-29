@@ -16,27 +16,29 @@ export interface NakamaState {
   login: (username: string) => Promise<void>;
 }
 
-function extractError(err: unknown): string {
-  if (err instanceof Error) {
-    const m = err.message;
-    const rpc = m.match(/^Error:\s*(.+?)\s*(?:at Error|$)/);
-    if (rpc) return rpc[1];
-    const json = m.match(/"message"\s*:\s*"([^"]+)"/);
-    if (json) return json[1];
-    return m;
+function cleanNakamaMessage(raw: string): string {
+  const rpc = raw.match(/^Error:\s*(.+?)\s+at\s+\w+/);
+  if (rpc) return rpc[1];
+  const json = raw.match(/"message"\s*:\s*"([^"]+)"/);
+  if (json) return cleanNakamaMessage(json[1]);
+  return raw;
+}
+
+async function extractError(err: unknown): Promise<string> {
+  if (typeof err === 'object' && err !== null && typeof (err as any).json === 'function') {
+    try {
+      const body = await (err as Response).json();
+      if (body.message) return cleanNakamaMessage(body.message);
+      if (body.error) return body.error;
+    } catch { /* fall through */ }
   }
+  if (err instanceof Error) return cleanNakamaMessage(err.message);
   if (typeof err === 'object' && err !== null) {
     const e = err as Record<string, unknown>;
-    // Nakama SDK throws { code, message, error } where message contains
-    // "Error: <msg> at Error (native)"
-    if (typeof e.message === 'string') {
-      const rpc = e.message.match(/^Error:\s*(.+?)\s*(?:at Error|$)/);
-      if (rpc) return rpc[1];
-      return e.message;
-    }
-    // Fallback: stringify the whole thing
+    if (typeof e.message === 'string') return cleanNakamaMessage(e.message);
     try { return JSON.stringify(err); } catch { /* ignore */ }
   }
+  if (typeof err === 'string') return err;
   return 'Connection failed';
 }
 
@@ -70,7 +72,7 @@ export function useNakama(): NakamaState {
     } catch (err: unknown) {
       setSession(null);
       setSocket(null);
-      setError(extractError(err));
+      setError(await extractError(err));
     } finally {
       setConnecting(false);
     }

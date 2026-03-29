@@ -336,7 +336,17 @@ function rpcCheckOnline(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nk
     try {
         var users = nk.usersGetId([ctx.userId]);
         if (users && users.length > 0 && users[0].online) {
-            return JSON.stringify({ error: 'This username already has an active session' });
+            var presences = nk.streamUserList({ mode: 0, subject: ctx.userId, subcontext: '', label: '' }, true, true);
+            var hasOtherSession = false;
+            for (var i = 0; i < presences.length; i++) {
+                if (presences[i].sessionId !== ctx.sessionId) {
+                    hasOtherSession = true;
+                    break;
+                }
+            }
+            if (hasOtherSession) {
+                return JSON.stringify({ error: 'This username already has an active session' });
+            }
         }
     } catch (e) {
         logger.error('rpcCheckOnline: failed to look up user %s: %s', ctx.userId, e);
@@ -348,14 +358,17 @@ function rpcCheckOnline(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nk
 function beforeAuthenticateDevice(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, data: nkruntime.AuthenticateDeviceRequest): nkruntime.AuthenticateDeviceRequest {
     var username = data.username || '';
     if (!username) return data;
+    var duplicate = false;
     try {
         var users = nk.usersGetUsername([username]);
         if (users && users.length > 0 && users[0].online) {
-            throw new Error('This username already has an active session');
+            duplicate = true;
         }
-    } catch (e: any) {
-        if (e.message === 'This username already has an active session') throw e;
+    } catch (e) {
         logger.warn('beforeAuthenticateDevice lookup failed for "%s": %s', username, e);
+    }
+    if (duplicate) {
+        throw <nkruntime.Error>{ message: 'This username already has an active session', code: nkruntime.Codes.ALREADY_EXISTS };
     }
     return data;
 }
