@@ -171,7 +171,7 @@ Op codes: `MOVE=1  GAME_STATE=2  GAME_OVER=3  ERROR=4`
 | **Optimistic UI** | Client shows a pending move instantly; corrected on next server broadcast |
 | **Pure reducer** (`reducer.ts`) | Zero React/SDK imports — fully unit-testable without mocks |
 | **Username-derived device ID** | Same username always maps to the same Nakama account (login semantics); different usernames get separate accounts for multi-tab testing |
-| **Single-session enforcement** | Server-side `check_online` RPC rejects login if the username already has an active WebSocket connection |
+| **Single-session enforcement** | `beforeAuthenticateDevice` hook atomically rejects authentication if the username already has an active WebSocket connection |
 | **Epoch timestamp for timer** | Server stores deadline as absolute epoch ms; re-checked every `matchLoop` tick. Client countdown is display-only |
 | **`SET` leaderboard operator** | Re-running the write after any game is idempotent — no double-counting wins |
 | **Nakama built-in matchmaker** | Handles edge cases (disconnect during search, concurrent tickets) for free |
@@ -372,7 +372,7 @@ The app is now live at `https://realtictactoe.mooo.com`.
 ```bash
 cd web
 npm run build
-sudo cp -r dist/* /var/www/html/
+sudo cp -r dist/* /var/www/realtictactoe/
 ```
 
 #### Redeploying after server changes
@@ -437,7 +437,7 @@ Key flags passed at startup (in `docker-compose.yml`):
 | `create_match` | POST | `{ "mode": "classic" \| "timed" }` | `{ "match_id": "..." }` |
 | `get_my_stats` | POST | `{}` | `{ wins, losses, draws, currentStreak, bestStreak, gamesPlayed }` |
 | `get_leaderboard` | POST | `{}` | `{ "records": [{ rank, username, wins }] }` |
-| `check_online` | POST | `{}` | `{ "online": false }` (throws error if user already has an active session) |
+| `check_online` | POST | `{}` | Returns `{ "online": false }` when the user has no active WebSocket (login allowed). Returns `{ "error": "This username already has an active session" }` when the user is already connected (login blocked). Note: single-session enforcement is now handled atomically by the `beforeAuthenticateDevice` hook; this RPC is retained for informational/debugging use. |
 
 Call via HTTP (useful for debugging):
 
@@ -464,7 +464,7 @@ curl -X POST http://localhost:7350/v2/rpc/get_leaderboard \
 
 The client uses **device authentication** with a deterministic device ID derived from the username (`nakama_user_<username>`). Entering the same username always resolves to the same Nakama account (login semantics). Different usernames map to different accounts, so two browser tabs with different names can play against each other.
 
-A server-side `check_online` RPC enforces single-session per username — if a user is already connected via WebSocket, a second login attempt with the same username is rejected.
+Single-session enforcement is handled atomically by a server-side `beforeAuthenticateDevice` hook. During authentication, the hook checks whether the username already has an active WebSocket connection; if so, the authentication itself is rejected before a session token is issued. This eliminates the TOCTOU race that would exist with a separate post-auth RPC. A legacy `check_online` RPC is still available for informational/debugging use.
 
 ### Server key
 
@@ -508,11 +508,19 @@ Because device IDs are derived from the username, you can test a full game with 
 # Verify the server plugin compiles cleanly
 cd server && npm install && npm run build
 
-# Run frontend unit tests (Vitest)
+# Run frontend unit tests (Vitest) — 29 tests across 3 suites
 cd web && npm test
 ```
 
-The frontend tests cover the pure game state reducer (`reducer.test.ts`) and protocol op code constants. They run without a Nakama instance.
+All tests run without a Nakama instance.
+
+| Test suite | What it covers | Tests |
+|------------|---------------|-------|
+| `board-logic.test.ts` | `applyMove` validation (bounds, occupied cell, invalid symbol), `checkOutcome` for all 8 win lines, draws, and in-progress detection, board immutability | 20 |
+| `reducer.test.ts` | `applyServerState` — symbol assignment, pending cell clearing, win/draw/waiting phase transitions, timed mode defaults | 6 |
+| `types.test.ts` | Op code values match server constants, uniqueness, positive integers | 3 |
+
+The board logic tests import directly from `server/src/board.ts` (single source of truth). A vitest plugin in `vitest.config.ts` auto-appends exports at test time so the server source stays unchanged for Nakama's `outFile` build.
 
 ### Nakama admin console
 
@@ -566,7 +574,7 @@ Key log lines to watch:
 | Edge Case | How it's handled |
 |-----------|-----------------|
 | **Re-login with existing username** | Device ID is derived from the username (`nakama_user_<name>`), so the same username always resolves to the same account — no "username already taken" error |
-| **Duplicate active session** | Server-side `check_online` RPC checks `user.online` before allowing socket connect. Second login with the same username is rejected |
+| **Duplicate active session** | Server-side `beforeAuthenticateDevice` hook checks `user.online` during authentication itself (atomic, no TOCTOU race). If the username already has an active WebSocket connection, the authentication is rejected before a session token is issued |
 | **Symbol spoofing** | Client only sends `{ cell }`. The server assigns symbols at join time and looks up the correct one from the sender's user ID |
 | **Self-matching** | `matchJoinAttempt` rejects a user who is already seated in the match |
 | **Duplicate in-flight move** | Client blocks sending a second move while a previous optimistic move is pending |

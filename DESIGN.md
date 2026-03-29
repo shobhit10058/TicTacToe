@@ -34,9 +34,11 @@ If a player's socket drops mid-game, Nakama calls `matchLeave`. I immediately de
 
 ### Authentication & sessions
 
+> **⚠ Demo-only authentication.** The device ID is derived from the username (`nakama_user_<name>`), meaning anyone who knows a username can log in as that account — there is no password, OAuth, or any other authentication barrier. This approach exists solely to simplify testing (same name → same account, different names → different accounts for multi-tab play). **Do not use this scheme in production.** A real deployment must use password-based, OAuth, or another verified credential flow.
+
 I wanted entering the same username to always log you back into the same account (not fail with "username already taken"). So the device ID is derived from the username — `nakama_user_<name>` — which means the same name always maps to the same Nakama account.
 
-I also added single-session enforcement: after authenticating, the client calls a `check_online` RPC. The server checks if that user already has an active socket connection. If yes, the login is rejected. This prevents two people from being logged in as the same username at the same time.
+Single-session enforcement is handled atomically inside a `beforeAuthenticateDevice` hook on the server. When a player authenticates, the hook checks whether the username already has an active WebSocket connection; if so, the authentication itself is rejected before a session token is ever issued. This eliminates the TOCTOU (time-of-check-to-time-of-use) race that would exist with a separate post-auth RPC — there is no window between "check" and "connect" where a second client could slip through. A legacy `check_online` RPC is still registered for informational use but is no longer part of the login-critical path.
 
 ### Responsive UI for mobile
 
@@ -51,6 +53,8 @@ When you click a cell, the client shows a dimmed pending symbol immediately — 
 ### Timed game mode (30s per turn)
 
 Players pick Classic or Timed from the lobby. In timed mode, the server stores a `turnDeadlineMs` (absolute epoch timestamp) and checks it every `matchLoop` tick at 2 Hz. If the clock runs out, the active player forfeits automatically. The client shows a countdown that goes green → orange → red, but it's purely cosmetic — the server is the only authority on whether time ran out.
+
+Because the server checks the deadline on a 2 Hz tick (every 500ms), timeout detection can be up to ~500ms late — a player may exceed the 30s limit by up to half a second before forfeiture triggers. This is acceptable for casual play but would need a higher tick rate for use cases requiring precise timing.
 
 ### Leaderboard
 
@@ -265,7 +269,8 @@ When a player clicks a cell, the client immediately marks it as "pending" (rende
 | Client tries to choose X or O | Client only sends `{ cell }`; server looks up symbol from `ms.symbols[sender.userId]` |
 | Client manipulates board state | Board lives only in server match state; client never sends board |
 | Client skips timer | Deadline enforced in `matchLoop`; client countdown is cosmetic only |
-| Duplicate active session | `check_online` RPC checks `user.online` before allowing socket connect |
+| Duplicate active session | `beforeAuthenticateDevice` hook atomically rejects auth if `user.online` is true — no TOCTOU window |
+| Username-derived device ID (no auth barrier) | **Demo-only.** Anyone who knows a username can impersonate the account. Production must use password/OAuth authentication |
 | Self-matching via private room | `matchJoinAttempt` rejects if the player's userId is already seated |
 | Stats tampering | Storage permission `write: 0` (server-only) |
 | Server stack traces leaking | RPCs return `{ error: "..." }` JSON instead of throwing, preventing internals from reaching the client |
@@ -297,6 +302,6 @@ Vite produces a static `dist/` folder. Deployable to any CDN or static host. Run
 | Nakama matchmaker | Custom lobby RPC | Battle-tested, handles edge cases (disconnect during search), free |
 | Nakama storage for stats | External DB | Zero extra infrastructure; fits within assignment scope |
 | `SET` leaderboard operator | `INCR` | Safer — re-running `recordGameResult` doesn't double-count wins |
-| Username-derived device ID | Random UUID per tab | Same username always maps to the same account (login semantics); different usernames still get separate accounts for multi-tab testing |
+| Username-derived device ID | Random UUID per tab | Same username always maps to the same account (login semantics); different usernames still get separate accounts for multi-tab testing. **Demo-only — no authentication barrier exists; anyone who knows a username can impersonate that account. Production must use password-based or OAuth authentication.** |
 | No React Router | React Router | Single-page with 4 screens doesn't warrant the dependency |
 | Tick rate 2 Hz | Higher | 500ms timer resolution is sufficient; lower CPU overhead |

@@ -28,6 +28,8 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunt
         {}                  // metadata
     );
 
+    initializer.registerBeforeAuthenticateDevice(beforeAuthenticateDevice);
+
     // RPCs callable from the client.
     initializer.registerRpc('create_match',   rpcCreateMatch);
     initializer.registerRpc('find_match',     rpcFindMatch);

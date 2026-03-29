@@ -6,6 +6,8 @@ services:
       POSTGRES_PASSWORD: localdb
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # DEV/DEBUG: Exposed for external tools like TablePlus. In production,
+    # restrict with security groups / firewall rules or remove this mapping.
     ports:
       - "5432:5432"
     healthcheck:

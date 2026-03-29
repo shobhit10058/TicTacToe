@@ -56,24 +56,20 @@ export function useNakama(): NakamaState {
     setConnecting(true);
     setError(null);
     try {
-      // Derive a stable device ID from the username so that re-entering the same
-      // username always resolves to the same Nakama account (login semantics).
-      // Different usernames → different device IDs → different accounts, so two
-      // browser tabs with different names can still play each other.
+      // DEV ONLY: Predictable device ID kept simple for development. In production,
+      // use a cryptographically random UUID persisted in localStorage per user,
+      // or switch to authenticateEmail / authenticateCustom with proper credentials.
       const deviceId = `nakama_user_${username}`;
-
       const sess = await clientRef.current.authenticateDevice(deviceId, true, username);
-
-      const res = await clientRef.current.rpc(sess, 'check_online', null as any);
-      const body = (res.payload ?? {}) as { error?: string };
-      if (body.error) throw new Error(body.error);
-
-      setSession(sess);
 
       const sock = clientRef.current.createSocket(USE_SSL, false);
       await sock.connect(sess, true);
+
+      setSession(sess);
       setSocket(sock);
     } catch (err: unknown) {
+      setSession(null);
+      setSocket(null);
       setError(extractError(err));
     } finally {
       setConnecting(false);

@@ -333,11 +333,31 @@ function rpcGetLeaderboard(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
 
 function rpcCheckOnline(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
     if (!ctx.userId) return JSON.stringify({ error: 'Not authenticated' });
-    var users = nk.usersGetId([ctx.userId]);
-    if (users && users.length > 0 && users[0].online) {
-        return JSON.stringify({ error: 'This username already has an active session' });
+    try {
+        var users = nk.usersGetId([ctx.userId]);
+        if (users && users.length > 0 && users[0].online) {
+            return JSON.stringify({ error: 'This username already has an active session' });
+        }
+    } catch (e) {
+        logger.error('rpcCheckOnline: failed to look up user %s: %s', ctx.userId, e);
+        return JSON.stringify({ error: 'Failed to check session status' });
     }
     return JSON.stringify({ online: false });
+}
+
+function beforeAuthenticateDevice(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, data: nkruntime.AuthenticateDeviceRequest): nkruntime.AuthenticateDeviceRequest {
+    var username = data.username || '';
+    if (!username) return data;
+    try {
+        var users = nk.usersGetUsername([username]);
+        if (users && users.length > 0 && users[0].online) {
+            throw new Error('This username already has an active session');
+        }
+    } catch (e: any) {
+        if (e.message === 'This username already has an active session') throw e;
+        logger.warn('beforeAuthenticateDevice lookup failed for "%s": %s', username, e);
+    }
+    return data;
 }
 
 function matchmakerMatched(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, matches: nkruntime.MatchmakerResult[]): string | void {
