@@ -33,7 +33,7 @@ No Go, no Java, no other runtimes required.
 
 ```bash
 git clone <repo-url>
-cd lilaGameAssignment
+cd TicTacToe
 ```
 
 **Step 1 — Start the backend (Nakama + PostgreSQL)**
@@ -170,79 +170,224 @@ Op codes: `MOVE=1  GAME_STATE=2  GAME_OVER=3  ERROR=4`
 | **Server-authoritative** | All move validation and win detection on server — clients cannot cheat |
 | **Optimistic UI** | Client shows a pending move instantly; corrected on next server broadcast |
 | **Pure reducer** (`reducer.ts`) | Zero React/SDK imports — fully unit-testable without mocks |
-| **`sessionStorage` for device ID** | Each browser tab gets its own Nakama account, enabling two-tab local testing |
+| **Username-derived device ID** | Same username always maps to the same Nakama account (login semantics); different usernames get separate accounts for multi-tab testing |
+| **Single-session enforcement** | Server-side `check_online` RPC rejects login if the username already has an active WebSocket connection |
 | **Epoch timestamp for timer** | Server stores deadline as absolute epoch ms; re-checked every `matchLoop` tick. Client countdown is display-only |
 | **`SET` leaderboard operator** | Re-running the write after any game is idempotent — no double-counting wins |
 | **Nakama built-in matchmaker** | Handles edge cases (disconnect during search, concurrent tickets) for free |
 | **Mode-scoped matchmaker query** | `+properties.mode:timed` ensures timed players only match timed players |
 
+### Mobile responsiveness
+
+The UI is built mobile-first using flexbox layouts, `maxWidth` card constraints (360px), and `clamp()` for responsive font sizing. A global `mobile.css` layer adds device-specific polish:
+
+- **Touch**: `touch-action: manipulation` on all buttons/inputs to eliminate the 300ms double-tap zoom delay
+- **Notched phones**: `env(safe-area-inset-*)` body padding for iPhone X+ notch and home indicator
+- **Small screens**: Font size reduction via `@media (max-width: 380px)` for devices like iPhone SE
+- **Orientation change**: `text-size-adjust: 100%` prevents iOS from auto-resizing text on rotate
+- **Tap targets**: All interactive elements have a minimum height of 48px (meets WCAG touch target guidelines)
+
 ---
 
 ## 3. Deployment
 
-### Build the server image
+### Deployed instance
 
-The `nakama/Dockerfile` is a two-stage build:
-1. **`node:22-alpine`** — installs dependencies and runs `tsc`
-2. **`heroiclabs/nakama:3.38.0`** — copies the compiled `index.js` bundle; Node.js is not in the final image
+| Resource | URL |
+| --- | --- |
+| Game (frontend) | **[https://realtictactoe.mooo.com](https://realtictactoe.mooo.com)** |
+| Nakama API endpoint | `https://realtictactoe.mooo.com/v2/` (proxied by nginx) |
+| Nakama healthcheck | `https://realtictactoe.mooo.com/healthcheck` |
+| Nakama WebSocket | `wss://realtictactoe.mooo.com/ws` (proxied by nginx) |
+
+Open two browser tabs to the game URL and play a match.
+
+### AWS EC2 deployment (what was actually done)
+
+The backend runs on an AWS EC2 **t3.small** (Ubuntu 22.04, 2 GB RAM, 15 GB volume). The frontend is served by nginx on the same instance.
+
+nginx acts as a reverse proxy — all public traffic goes through port 443 (HTTPS). Nakama is never exposed directly; nginx routes internally:
+
+| Public path | Internal target |
+| --- | --- |
+| `https://realtictactoe.mooo.com/` | nginx → `dist/` static files |
+| `https://realtictactoe.mooo.com/v2/` | nginx → `http://127.0.0.1:7350` (Nakama REST) |
+| `https://realtictactoe.mooo.com/healthcheck` | nginx → `http://127.0.0.1:7350/healthcheck` |
+| `wss://realtictactoe.mooo.com/ws` | nginx → `ws://127.0.0.1:7350/ws` (Nakama WebSocket) |
+
+The Nakama admin console (port 7351) is **intentionally not exposed publicly**. Routing it through nginx would allow unlimited login attempts against the admin credentials with no brute-force protection. Access is restricted to an SSH tunnel:
 
 ```bash
-# Build and tag
-docker build -f nakama/Dockerfile -t <your-registry>/tictactoe-nakama:latest .
-
-# Push to registry
-docker push <your-registry>/tictactoe-nakama:latest
+ssh -i <your-key.pem> -L 7351:localhost:7351 ubuntu@realtictactoe.mooo.com
 ```
 
-### Production docker-compose.yml
+Then open `http://localhost:7351` in your browser (login: `admin` / `password`).
 
-Replace the `build:` block with `image:` for the nakama service:
+#### 1. Launch EC2 instance
 
-```yaml
-nakama:
-  image: <your-registry>/tictactoe-nakama:latest
-  entrypoint:
-    - "/bin/sh"
-    - "-ecx"
-    - >
-      /nakama/nakama migrate up --database.address postgres:${DB_PASSWORD}@${DB_HOST}:5432/nakama &&
-      exec /nakama/nakama
-      --database.address postgres:${DB_PASSWORD}@${DB_HOST}:5432/nakama
-      --session.token_expiry_sec 7200
-      --runtime.path /nakama/data/modules
-      --config /nakama/data/modules/local.yml
-  environment:
-    - DB_HOST=<your-postgres-host>
-    - DB_PASSWORD=<your-password>
+- AMI: Ubuntu 22.04 LTS
+- Instance type: t3.small (2 vCPU, 2 GB RAM, 15 GB EBS volume)
+- Security group inbound rules:
+
+| Port | Protocol | Source    | Purpose              |
+|------|----------|-----------|----------------------|
+| 22   | TCP      | Your IP   | SSH                  |
+| 80   | TCP      | 0.0.0.0/0 | nginx / certbot      |
+| 443  | TCP      | 0.0.0.0/0 | nginx HTTPS          |
+
+#### 2. Install Docker
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+sudo usermod -aG docker $USER
+newgrp docker
 ```
 
-### Cloud deployment (example: DigitalOcean / AWS ECS)
+#### 3. Install Node.js
 
-1. Provision a managed PostgreSQL instance.
-2. Push the Nakama image to your registry.
-3. Deploy as a container service, set `--database.address` to point at the managed DB.
-4. Expose port `7350` (HTTP/WS). Optionally put a TLS-terminating load balancer in front on port `443`.
-5. Set the `NAKAMA_CONSOLE_PASSWORD` environment variable to secure the admin console.
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt install -y nodejs
+```
 
-### Build and deploy the frontend
+#### 4. Clone and start the backend
+
+```bash
+git clone https://github.com/<your-username>/<repo-name>.git
+cd <repo-name>
+docker compose up --build -d
+```
+
+Wait for:
+
+```text
+nakama-1  | {"msg":"Startup done"}
+```
+
+Verify Nakama is reachable:
+
+```bash
+curl http://localhost:7350/healthcheck
+# → {}
+```
+
+#### 5. Get a free domain
+
+Sign up at [FreeDNS (freedns.afraid.org)](https://freedns.afraid.org/subdomain/) and create a subdomain (e.g. `realtictactoe.mooo.com`) pointing to your EC2 public IP.
+
+#### 6. Set up nginx
+
+```bash
+sudo apt install -y nginx
+sudo mkdir -p /var/www/realtictactoe
+
+# Create site config
+sudo tee /etc/nginx/sites-available/realtictactoe > /dev/null << 'EOF'
+server {
+    listen 80;
+    server_name realtictactoe.mooo.com;
+
+    root /var/www/realtictactoe;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /v2/ {
+        proxy_pass http://127.0.0.1:7350;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /healthcheck {
+        proxy_pass http://127.0.0.1:7350/healthcheck;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
+
+    location /ws {
+        proxy_pass http://127.0.0.1:7350/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+    }
+}
+EOF
+
+sudo ln -s /etc/nginx/sites-available/realtictactoe /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+#### 7. Add HTTPS with certbot
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+sudo certbot --nginx -d realtictactoe.mooo.com
+```
+
+Certbot automatically adds SSL to the nginx config and sets up HTTP → HTTPS redirect. Certificates auto-renew via a systemd timer.
+
+#### 8. Build and deploy the frontend
+
+```bash
+cd ~/TicTacToe/web
+npm install
+
+VITE_NAKAMA_HOST=realtictactoe.mooo.com \
+VITE_NAKAMA_PORT=443 \
+VITE_NAKAMA_KEY=defaultkey \
+VITE_USE_SSL=true \
+npm run build
+
+sudo cp -r dist/* /var/www/realtictactoe/
+```
+
+The app is now live at `https://realtictactoe.mooo.com`.
+
+#### Redeploying after frontend changes
 
 ```bash
 cd web
-VITE_NAKAMA_HOST=your.nakama.host \
-VITE_NAKAMA_PORT=443 \
-VITE_NAKAMA_KEY=your-server-key \
-VITE_USE_SSL=true \
 npm run build
+sudo cp -r dist/* /var/www/html/
 ```
 
-This produces a static `web/dist/` folder. Deploy it to any static host:
+#### Redeploying after server changes
 
-| Host | Command |
-|------|---------|
-| **Vercel** | `vercel --prod web/dist` |
-| **Netlify** | `netlify deploy --prod --dir web/dist` |
-| **S3 + CloudFront** | `aws s3 sync web/dist s3://your-bucket --delete` |
-| **Nginx** | Serve `web/dist` as document root with `try_files $uri /index.html` |
+```bash
+docker compose down
+docker compose up --build -d
+```
+
+### Dockerfile overview
+
+The `nakama/Dockerfile` is a two-stage build:
+
+1. **`node:22-alpine`** — installs dependencies and runs `tsc`
+2. **`heroiclabs/nakama:3.38.0`** — copies the compiled `index.js` bundle; Node.js is not in the final image
 
 ---
 
@@ -292,6 +437,7 @@ Key flags passed at startup (in `docker-compose.yml`):
 | `create_match` | POST | `{ "mode": "classic" \| "timed" }` | `{ "match_id": "..." }` |
 | `get_my_stats` | POST | `{}` | `{ wins, losses, draws, currentStreak, bestStreak, gamesPlayed }` |
 | `get_leaderboard` | POST | `{}` | `{ "records": [{ rank, username, wins }] }` |
+| `check_online` | POST | `{}` | `{ "online": false }` (throws error if user already has an active session) |
 
 Call via HTTP (useful for debugging):
 
@@ -316,7 +462,9 @@ curl -X POST http://localhost:7350/v2/rpc/get_leaderboard \
 
 ### Authentication
 
-The client uses **device authentication** — a random UUID stored in `sessionStorage` is passed to `authenticateDevice`. Each browser tab gets its own UUID (and therefore its own Nakama account), which allows two tabs in the same browser to play against each other during development.
+The client uses **device authentication** with a deterministic device ID derived from the username (`nakama_user_<username>`). Entering the same username always resolves to the same Nakama account (login semantics). Different usernames map to different accounts, so two browser tabs with different names can play against each other.
+
+A server-side `check_online` RPC enforces single-session per username — if a user is already connected via WebSocket, a second login attempt with the same username is rejected.
 
 ### Server key
 
@@ -328,7 +476,7 @@ The default server key is `defaultkey` (set in `local.yml` and matched by `VITE_
 
 ### Quick-start: two players in the same browser
 
-Because device IDs are stored in `sessionStorage` (per-tab), you can test a full game with two browser tabs:
+Because device IDs are derived from the username, you can test a full game with two browser tabs using different names:
 
 1. `docker compose up --build` (wait for `Startup done`)
 2. `cd web && npm install && npm run dev`
@@ -351,6 +499,8 @@ Because device IDs are stored in `sessionStorage` (per-tab), you can test a full
 | **Private room** | Tab A: Create private room → copy ID. Tab B: paste ID → Join | Both enter the same match |
 | **Leaderboard** | Play several games, then open Leaderboard | Rankings and personal stats reflect completed games |
 | **Mode isolation** | Tab A: Quick match (Classic). Tab B: Quick match (Timed) | Tabs are NOT matched — they wait until a same-mode player joins |
+| **Duplicate username blocked** | Tab A: login as "Alice". Tab B: try login as "Alice" | Tab B shows error "This username already has an active session" |
+| **Re-login after disconnect** | Login as "Alice", close tab, open new tab, login as "Alice" again | Login succeeds — same account, stats preserved |
 
 ### Unit tests
 
@@ -405,3 +555,23 @@ Key log lines to watch:
 | Concurrent independent games | Bonus |
 | Disconnect → forfeit win | Core |
 | Optimistic UI (instant pending move) | Core |
+| Single-session enforcement | Core |
+
+---
+
+## 6. Edge Cases and Validations
+
+### Authentication & Sessions
+
+| Edge Case | How it's handled |
+|-----------|-----------------|
+| **Re-login with existing username** | Device ID is derived from the username (`nakama_user_<name>`), so the same username always resolves to the same account — no "username already taken" error |
+| **Duplicate active session** | Server-side `check_online` RPC checks `user.online` before allowing socket connect. Second login with the same username is rejected |
+| **Symbol spoofing** | Client only sends `{ cell }`. The server assigns symbols at join time and looks up the correct one from the sender's user ID |
+| **Self-matching** | `matchJoinAttempt` rejects a user who is already seated in the match |
+| **Duplicate in-flight move** | Client blocks sending a second move while a previous optimistic move is pending |
+| **Mode mismatch in matchmaker** | Matchmaker query uses `+properties.mode:<mode>` so timed and classic players never cross-match |
+| **Stats tampering** | Player stats storage has `permissionWrite: 0` (server-only). Clients cannot modify their own records |
+| **No stack traces to client** | RPCs return structured `{ error: "..." }` JSON instead of throwing, preventing internals from leaking |
+| **Race condition on opponent lookup** | Client verifies opponent ID hasn't changed during async username fetch before applying the result |
+| **Disconnect mid-game** | `matchLeave` awards a forfeit win to the remaining player and records stats for both |

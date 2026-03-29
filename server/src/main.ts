@@ -33,6 +33,7 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunt
     initializer.registerRpc('find_match',     rpcFindMatch);
     initializer.registerRpc('get_my_stats',   rpcGetMyStats);
     initializer.registerRpc('get_leaderboard', rpcGetLeaderboard);
+    initializer.registerRpc('check_online',    rpcCheckOnline);
 
     logger.info('Tic-Tac-Toe module initialised successfully');
 }

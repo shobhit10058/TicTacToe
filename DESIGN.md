@@ -1,51 +1,68 @@
 # Design Document — Multiplayer Tic-Tac-Toe
 
-## 1. Overview
+## 1. What I built and why
 
-A real-time, server-authoritative multiplayer Tic-Tac-Toe game. Two players connect over WebSocket through a Nakama game server. All game logic — move validation, win detection, turn enforcement, and timer management — runs exclusively on the server. The frontend is a thin display layer that sends user input and renders authoritative state.
+This is a real-time multiplayer Tic-Tac-Toe game where two players connect over WebSocket and play against each other. The entire game logic runs on the server — the frontend is just a thin layer that sends clicks and renders what the server tells it. I chose this architecture because the assignment specifically asked for a server-authoritative design, and honestly it's the only sane way to build a multiplayer game where you don't want people cheating.
 
----
+The stack is TypeScript everywhere: Nakama's TypeScript runtime for the server plugin, React + Vite for the frontend. I went with TypeScript over Go for the Nakama plugin because it keeps the codebase uniform and is the officially supported approach from Heroic Labs.
 
-## 2. Feature Breakdown
-
-### Core features (required)
-
-#### Real-time multiplayer over WebSocket
-Players communicate with Nakama over a persistent WebSocket connection managed by the Nakama JS SDK. All game events (moves, state updates, game-over) are pushed from the server — the client never polls.
-
-#### Server-authoritative match handler
-Every move is validated on the server inside `matchLoop`. The server checks: is the game in the `playing` phase? Is this the sender's turn? Is the target cell empty? Only if all checks pass does the board update. The client cannot influence the game state directly — it only sends a cell index.
-
-#### Win and draw detection
-`checkOutcome` in `board.ts` checks all 8 winning lines (3 rows, 3 columns, 2 diagonals) after every move. A draw is declared when all 9 cells are filled with no winner. The result is broadcast to both clients as a `GAME_OVER` message.
-
-#### Matchmaking — quick match
-Uses Nakama's built-in matchmaker. Each client submits a ticket via `socket.addMatchmaker`. When two compatible tickets exist, Nakama calls the server-side `matchmakerMatched` hook, which creates an authoritative match and returns the `match_id`. Both clients receive the ID and join automatically.
-
-#### Matchmaking — private room
-A player calls the `create_match` RPC to create a named match and receives a `match_id`. They share this ID out-of-band. The second player pastes it into the Join field. Both players end up in the same authoritative match.
-
-#### Disconnect handling
-`matchLeave` is called by Nakama whenever a player's WebSocket closes during a game. The server immediately declares the remaining player the winner by forfeit, records the outcome, and broadcasts `GAME_OVER`.
-
-#### Optimistic UI
-Clicking a cell renders a pending (dimmed) symbol immediately without waiting for the server round-trip, making the game feel instant. The pending state is cleared as soon as the authoritative `GAME_STATE` arrives. If the server rejects the move (`ERROR`), the pending state is cleared and the board returns to its last known good state.
+Below is a walkthrough of every feature the assignment asked for, how I implemented it, and the bonus features I added on top.
 
 ---
 
-### Bonus features (implemented)
+## 2. Features implemented
 
-#### Timed game mode (30-second turns)
-Selectable from the lobby alongside Classic mode. On the server, `turnDeadlineMs` stores the absolute epoch millisecond at which the current turn expires. Every `matchLoop` tick (2 Hz) checks `Date.now() >= turnDeadlineMs`; on expiry the active player forfeits. The client displays a live countdown that changes colour (green → orange → red) but has no authority over the game outcome.
+### Server-authoritative game logic
 
-#### Leaderboard
-A persistent `tictactoe_wins` leaderboard backed by Nakama's built-in leaderboard API (descending sort, `SET` operator). After every game conclusion the server writes the player's total win count. The top 10 are exposed via the `get_leaderboard` RPC and displayed in a dedicated Leaderboard screen.
+This was the core requirement. Every move goes through the server's `matchLoop` where it gets validated — is the game still going? Is it actually this player's turn? Is the cell empty? Is the cell index even valid (0–8)? Only after all checks pass does the board update. The client sends just a cell number, nothing else. It doesn't get to pick X or O — the server assigned that when the player joined. So even if someone tampers with the client code, they can't send a move as the other player's symbol or put a piece on an occupied square.
 
-#### Player statistics
-Each player has a stats record in Nakama key-value storage (`player_stats / game_stats`). It tracks wins, losses, draws, current win streak, and best ever win streak. Stats are updated on every game end — including timeouts and forfeits — and are displayed below the leaderboard table in the UI. Storage permissions are set to public-read / server-only-write so stats cannot be tampered with from the client.
+### Real-time WebSocket gameplay
 
-#### Concurrent games
-Nakama's authoritative match system natively supports running many matches in parallel — each match is an isolated stateful object on the server. There is no global shared state between matches. Multiple pairs of players can be in different games simultaneously without interference.
+Players talk to Nakama over a persistent WebSocket connection. All game events — board updates, game over, errors — are pushed from the server instantly. There's no polling involved. I used the Nakama JS SDK (v2.8) which handles the socket lifecycle and reconnection under the hood.
+
+### Matchmaking
+
+I implemented two ways to start a game:
+
+**Quick match** — the player hits "Quick match" and I submit a matchmaker ticket through Nakama's built-in matchmaker. When two tickets with the same mode exist, Nakama fires the `matchmakerMatched` hook on the server, which creates an authoritative match. Both clients get notified and auto-join. I scoped the matchmaker query by mode (`+properties.mode:timed`) so a Classic player never gets paired with a Timed player.
+
+**Private rooms** — one player creates a room via the `create_match` RPC, gets a match ID, and shares it. The other player pastes that ID and joins directly. I also added a guard so a player can't accidentally match against themselves by joining their own room.
+
+### Disconnect handling
+
+If a player's socket drops mid-game, Nakama calls `matchLeave`. I immediately declare the remaining player the winner by forfeit, record the stats for both, and broadcast the game over. No dangling matches.
+
+### Authentication & sessions
+
+I wanted entering the same username to always log you back into the same account (not fail with "username already taken"). So the device ID is derived from the username — `nakama_user_<name>` — which means the same name always maps to the same Nakama account.
+
+I also added single-session enforcement: after authenticating, the client calls a `check_online` RPC. The server checks if that user already has an active socket connection. If yes, the login is rejected. This prevents two people from being logged in as the same username at the same time.
+
+### Responsive UI for mobile
+
+The UI is built with flexbox layouts and `maxWidth` card constraints so it works on any screen size out of the box. On top of that I added `touch-action: manipulation` to eliminate the 300ms tap delay, safe-area padding for notched phones, and a media query for small screens like iPhone SE. All tap targets are at least 48px. Cell font sizes use `clamp()` to scale between mobile and desktop.
+
+### Optimistic UI
+
+When you click a cell, the client shows a dimmed pending symbol immediately — before the server even responds. Once the server broadcasts the authoritative state, the pending mark gets replaced with the real one. If the server rejects the move, the pending mark just disappears. This makes the game feel instant even with some network latency.
+
+---
+
+### Timed game mode (30s per turn)
+
+Players pick Classic or Timed from the lobby. In timed mode, the server stores a `turnDeadlineMs` (absolute epoch timestamp) and checks it every `matchLoop` tick at 2 Hz. If the clock runs out, the active player forfeits automatically. The client shows a countdown that goes green → orange → red, but it's purely cosmetic — the server is the only authority on whether time ran out.
+
+### Leaderboard
+
+I created a `tictactoe_wins` leaderboard using Nakama's built-in leaderboard API. After every game ends, the server writes the player's total win count with the `SET` operator (so re-running the write is idempotent — no double-counting). The top 10 are fetched via an RPC and shown in a dedicated Leaderboard screen.
+
+### Player statistics
+
+Each player has a stats record in Nakama's key-value storage tracking wins, losses, draws, current streak, and best streak. These get updated on every game end — wins, losses, timeouts, forfeits, all of it. The storage permissions are public-read but server-only-write, so clients can see stats but can't tamper with them. The stats show up below the leaderboard in the UI.
+
+### Concurrent games
+
+Nakama's authoritative match system handles this natively — each match is its own isolated state machine on the server. There's no shared global state between matches. Multiple games can run in parallel without stepping on each other.
 
 ---
 
@@ -62,7 +79,7 @@ Nakama's authoritative match system natively supports running many matches in pa
 
 ---
 
-## 3. System Architecture
+## 4. System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -87,7 +104,7 @@ Nakama's authoritative match system natively supports running many matches in pa
 │  │ InitModule                                               │   │
 │  │  • registerMatch('tictactoe', matchHandlers)             │   │
 │  │  • registerMatchmakerMatched(matchmakerMatched)          │   │
-│  │  • registerRpc(create_match, find_match, ...)            │   │
+│  │  • registerRpc(create_match, find_match, check_online, ..)│   │
 │  │  • leaderboardCreate('tictactoe_wins')                   │   │
 │  └──────────────────────────────────────────────────────────┘   │
 │  ┌──────────────────────────────────────────────────────────┐   │
@@ -108,12 +125,12 @@ Nakama's authoritative match system natively supports running many matches in pa
 
 ---
 
-## 4. Match Lifecycle
+## 5. Match Lifecycle
 
 ```
 matchInit          — allocate board, set phase = 'waiting'
      │
-matchJoinAttempt   — reject if full (≥2) or finished
+matchJoinAttempt   — reject if full (≥2), finished, or same user already seated
      │
 matchJoin          — assign X / O; when both seats filled:
      │                phase = 'playing', broadcast GAME_STATE
@@ -134,7 +151,7 @@ waiting ──(2 players joined)──► playing ──(win/draw/timeout/forfei
 
 ---
 
-## 5. Message Protocol
+## 6. Message Protocol
 
 All messages are binary-encoded JSON over Nakama's real-time WebSocket.
 
@@ -164,7 +181,7 @@ All messages are binary-encoded JSON over Nakama's real-time WebSocket.
 
 ---
 
-## 6. Game Modes
+## 7. Game Modes
 
 ### Classic
 Standard rules. No time limit. Match continues until win or draw.
@@ -176,7 +193,7 @@ On every `matchLoop` tick (2 Hz), the server checks `Date.now() >= turnDeadlineM
 
 ---
 
-## 7. Matchmaking
+## 8. Matchmaking
 
 Two paths to enter a game:
 
@@ -194,7 +211,7 @@ Two paths to enter a game:
 
 ---
 
-## 8. Leaderboard & Stats
+## 9. Leaderboard & Stats
 
 ### Per-player stats (Nakama storage)
 Stored at `player_stats / game_stats / <user_id>` (public read, server-only write):
@@ -210,7 +227,7 @@ Updated after every game end (win, loss, draw, timeout, disconnect forfeit).
 
 ---
 
-## 9. Frontend Architecture
+## 10. Frontend Architecture
 
 ### Screen routing (App.tsx)
 State-machine routing — no router library needed:
@@ -225,7 +242,7 @@ login → lobby → (searching) → (waiting) → playing → game-over
 
 | Hook | Responsibility |
 |------|----------------|
-| `useNakama` | Nakama client init, device-auth, socket connect |
+| `useNakama` | Nakama client init, username-derived device auth, single-session check, socket connect |
 | `useMatch` | Match lifecycle, WebSocket events, optimistic moves, mode selection |
 | `useLeaderboard` | Fetch leaderboard + personal stats via RPC |
 
@@ -237,20 +254,25 @@ When a player clicks a cell, the client immediately marks it as "pending" (rende
 
 ---
 
-## 10. Security Model
+## 11. Security Model
 
 | Threat | Mitigation |
 |--------|------------|
 | Client sends move out of turn | Server checks `msg.sender.userId === ms.currentTurn` |
 | Client sends move to occupied cell | `applyMove` throws; server sends ERROR |
 | Client sends move after game ends | Server checks `ms.phase === 'playing'` |
+| Client sends invalid cell index | `applyMove` validates cell is within 0–8 range |
+| Client tries to choose X or O | Client only sends `{ cell }`; server looks up symbol from `ms.symbols[sender.userId]` |
 | Client manipulates board state | Board lives only in server match state; client never sends board |
 | Client skips timer | Deadline enforced in `matchLoop`; client countdown is cosmetic only |
+| Duplicate active session | `check_online` RPC checks `user.online` before allowing socket connect |
+| Self-matching via private room | `matchJoinAttempt` rejects if the player's userId is already seated |
 | Stats tampering | Storage permission `write: 0` (server-only) |
+| Server stack traces leaking | RPCs return `{ error: "..." }` JSON instead of throwing, preventing internals from reaching the client |
 
 ---
 
-## 11. Build & Deployment
+## 12. Build & Deployment
 
 ### Server plugin compilation
 The TypeScript plugin is compiled with `tsc --outFile build/index.js` (ES5 target, no module system). All three source files (`board.ts`, `match.ts`, `main.ts`) are concatenated into a single bundle that Nakama's embedded goja JavaScript engine loads directly — no webpack, no bundler.
@@ -267,7 +289,7 @@ Vite produces a static `dist/` folder. Deployable to any CDN or static host. Run
 
 ---
 
-## 12. Trade-offs and Alternatives Considered
+## 13. Trade-offs and Alternatives Considered
 
 | Decision | Alternative | Reason chosen |
 |----------|-------------|---------------|
@@ -275,6 +297,6 @@ Vite produces a static `dist/` folder. Deployable to any CDN or static host. Run
 | Nakama matchmaker | Custom lobby RPC | Battle-tested, handles edge cases (disconnect during search), free |
 | Nakama storage for stats | External DB | Zero extra infrastructure; fits within assignment scope |
 | `SET` leaderboard operator | `INCR` | Safer — re-running `recordGameResult` doesn't double-count wins |
-| `sessionStorage` for device ID | `localStorage` | Allows two tabs in the same browser to be different users (testing) |
+| Username-derived device ID | Random UUID per tab | Same username always maps to the same account (login semantics); different usernames still get separate accounts for multi-tab testing |
 | No React Router | React Router | Single-page with 4 screens doesn't warrant the dependency |
 | Tick rate 2 Hz | Higher | 500ms timer resolution is sufficient; lower CPU overhead |

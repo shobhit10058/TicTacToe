@@ -162,6 +162,9 @@ function matchJoinAttempt(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: 
     var count = 0;
     for (var i = 0; i < ms.players.length; i++) { if (ms.players[i] !== '') count++; }
     if (count >= 2) return { state: ms, accept: false, rejectMessage: 'Match is full' };
+    for (var i = 0; i < ms.players.length; i++) {
+        if (ms.players[i] === presence.userId) return { state: ms, accept: false, rejectMessage: 'You are already in this match' };
+    }
     return { state: ms, accept: true };
 }
 
@@ -326,6 +329,15 @@ function rpcGetLeaderboard(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
         logger.error('rpcGetLeaderboard error: %s', e);
         return JSON.stringify({ records: [] });
     }
+}
+
+function rpcCheckOnline(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
+    if (!ctx.userId) return JSON.stringify({ error: 'Not authenticated' });
+    var users = nk.usersGetId([ctx.userId]);
+    if (users && users.length > 0 && users[0].online) {
+        return JSON.stringify({ error: 'This username already has an active session' });
+    }
+    return JSON.stringify({ online: false });
 }
 
 function matchmakerMatched(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, matches: nkruntime.MatchmakerResult[]): string | void {

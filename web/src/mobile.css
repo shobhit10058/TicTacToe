@@ -1,0 +1,28 @@
+/* Touch optimizations */
+button, input {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation; /* prevent double-tap zoom */
+}
+
+/* Safe area for notched phones (iPhone X+) */
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Small screens (< 380px, e.g. iPhone SE) */
+@media (max-width: 380px) {
+  h1 { font-size: 1.5rem !important; }
+  h2 { font-size: 1.2rem !important; }
+}
+
+/* Prevent text size adjustment on orientation change */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Smooth scrolling for iOS momentum */
+html, body {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
