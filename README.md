@@ -86,7 +86,7 @@ VITE_NAKAMA_KEY=defaultkey   # Nakama server key (must match local.yml)
 VITE_USE_SSL=false           # Set true when behind HTTPS
 ```
 
-The app reads these at build time via Vite's `import.meta.env`. No restart needed for `.env.local` changes — Vite hot-reloads them.
+The app reads these at build time via Vite's `import.meta.env`. Changes to `.env.local` require a dev server restart to take effect.
 
 ---
 
@@ -372,17 +372,31 @@ The app is now live at `https://realtictactoe.mooo.com`.
 #### Redeploying after frontend changes
 
 ```bash
-cd web
+cd ~/TicTacToe/web
+npm install
+VITE_NAKAMA_HOST=realtictactoe.mooo.com \
+VITE_NAKAMA_PORT=443 \
+VITE_NAKAMA_KEY=defaultkey \
+VITE_USE_SSL=true \
 npm run build
 sudo cp -r dist/* /var/www/realtictactoe/
 ```
 
+No nginx reload needed — nginx serves static files directly from the directory, so new files are picked up immediately.
+
 #### Redeploying after server changes
 
 ```bash
+cd ~/TicTacToe
 docker compose down
 docker compose up --build -d
 ```
+
+Wait for `nakama-1 | {"msg":"Startup done"}` before testing. No nginx reload needed — the proxy targets (`localhost:7350`) don't change.
+
+#### When you DO need `sudo systemctl reload nginx`
+
+Only if you edit the nginx site config (e.g., adding a new proxy route, changing the domain, or updating SSL settings). Normal code deployments never require it.
 
 ### Dockerfile overview
 
@@ -399,20 +413,22 @@ The `nakama/Dockerfile` is a two-stage build:
 
 ```yaml
 name: nakama1
-data_dir: /nakama/data
 
 logger:
-  level: DEBUG          # Change to INFO / WARN in production
-
-session:
-  token_expiry_sec: 7200
-
-runtime:
-  js_entrypoint: index.js   # The compiled TypeScript bundle
+  level: "DEBUG"            # Change to INFO / WARN in production
 
 console:
+  port: 7351
   username: admin
   password: password        # Change in production
+
+socket:
+  port: 7350
+  max_message_size_bytes: 4096
+
+runtime:
+  path: "/nakama/data/modules"
+  http_key: "defaulthttpkey"
 ```
 
 Key flags passed at startup (in `docker-compose.yml`):
@@ -422,6 +438,7 @@ Key flags passed at startup (in `docker-compose.yml`):
 | `--database.address` | `postgres:localdb@postgres:5432/nakama` | PostgreSQL connection string |
 | `--session.token_expiry_sec` | `7200` | Session lifetime (2 hours) |
 | `--runtime.path` | `/nakama/data/modules` | Directory containing `index.js` |
+| `--config` | `/nakama/data/modules/local.yml` | Runtime configuration file |
 
 ### Ports
 
@@ -470,7 +487,7 @@ Single-session enforcement is handled atomically by a server-side `beforeAuthent
 
 ### Server key
 
-The default server key is `defaultkey` (set in `local.yml` and matched by `VITE_NAKAMA_KEY`). Change both in production.
+The default server key is `defaultkey` (Nakama's built-in default, matched by `VITE_NAKAMA_KEY` in the frontend). The `http_key` in `local.yml` (`defaulthttpkey`) is a separate key used for unauthenticated HTTP RPC calls. Change both in production.
 
 ---
 
