@@ -4,7 +4,7 @@ A real-time, server-authoritative multiplayer Tic-Tac-Toe game.
 
 **Stack:** Nakama game server (TypeScript runtime plugin) · React 18 + Vite + TypeScript · PostgreSQL · Docker Compose
 
-**Bonus features implemented:** timed game mode (30 s/turn with server-enforced forfeit), global leaderboard, per-player win/loss/streak statistics, concurrent match support.
+**Key features:** server-authoritative game logic, real-time WebSocket multiplayer, timed game mode (30 s/turn with server-enforced forfeit), global leaderboard, per-player win/loss/streak statistics, concurrent match support, single-session enforcement, mobile-responsive UI.
 
 ---
 
@@ -92,6 +92,8 @@ The app reads these at build time via Vite's `import.meta.env`. No restart neede
 
 ## 2. Architecture and Design Decisions
 
+For a deeper dive into the architecture, feature implementation details, security model, and trade-offs, see [DESIGN.md](DESIGN.md).
+
 ### System overview
 
 ```
@@ -143,7 +145,7 @@ PostgreSQL  (accounts · key-value storage · leaderboards)
 
 ```
 matchInit          → allocate board, phase = 'waiting'
-matchJoinAttempt   → reject if match is full or finished
+matchJoinAttempt   → reject if full, finished, or same user already seated
 matchJoin          → assign X / O; start game when 2nd player arrives
 matchLoop (2 Hz)   → process MOVE messages; enforce timer deadline
 matchLeave         → forfeit win to remaining player
@@ -550,20 +552,20 @@ Key log lines to watch:
 
 ## Features at a glance
 
-| Feature | Status |
-|---------|--------|
-| Real-time WebSocket gameplay | Core |
-| Server-authoritative move validation | Core |
-| Quick match (built-in matchmaker) | Core |
-| Private rooms (share room ID) | Core |
-| Classic mode | Core |
-| Timed mode — 30 s/turn, server-enforced forfeit | Bonus |
-| Global leaderboard (top 10 by wins) | Bonus |
-| Per-player statistics (W/L/D/streaks) | Bonus |
-| Concurrent independent games | Bonus |
-| Disconnect → forfeit win | Core |
-| Optimistic UI (instant pending move) | Core |
-| Single-session enforcement | Core |
+| Feature |
+|---------|
+| Real-time WebSocket gameplay |
+| Server-authoritative move validation |
+| Quick match (built-in matchmaker) |
+| Private rooms (share room ID) |
+| Classic and Timed modes (30 s/turn, server-enforced forfeit) |
+| Global leaderboard (top 10 by wins) |
+| Per-player statistics (W/L/D/streaks) |
+| Concurrent independent games |
+| Disconnect → forfeit win |
+| Optimistic UI (instant pending move) |
+| Single-session enforcement |
+| Mobile-responsive UI |
 
 ---
 

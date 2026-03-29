@@ -6,7 +6,7 @@ This is a real-time multiplayer Tic-Tac-Toe game where two players connect over 
 
 The stack is TypeScript everywhere: Nakama's TypeScript runtime for the server plugin, React + Vite for the frontend. I went with TypeScript over Go for the Nakama plugin because it keeps the codebase uniform and is the officially supported approach from Heroic Labs.
 
-Below is a walkthrough of every feature the assignment asked for, how I implemented it, and the bonus features I added on top.
+Below is a walkthrough of every feature, how I implemented it, and why.
 
 ---
 
@@ -190,7 +190,7 @@ All messages are binary-encoded JSON over Nakama's real-time WebSocket.
 ### Classic
 Standard rules. No time limit. Match continues until win or draw.
 
-### Timed (bonus feature)
+### Timed
 Each player has **30 seconds** per turn. The deadline is stored as an absolute epoch timestamp (`turnDeadlineMs`) in the server's match state.
 
 On every `matchLoop` tick (2 Hz), the server checks `Date.now() >= turnDeadlineMs`. If the deadline is exceeded, the active player forfeits and the opponent wins. The client displays a live countdown using a `setInterval` — purely cosmetic; the server is the authority.
